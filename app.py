@@ -1,0 +1,136 @@
+"""
+app.py
+Flask REST API for the inventory management system.
+Data is stored in the in-memory `inventory` list from data.py.
+"""
+
+from flask import Flask, jsonify, request
+
+from data import inventory, get_next_id, find_item
+
+app = Flask(__name__)
+
+# Fields a client is allowed to set when creating or updating an item
+ALLOWED_FIELDS = {
+    "barcode",
+    "product_name",
+    "brands",
+    "ingredients_text",
+    "categories",
+    "nutriscore_grade",
+    "image_url",
+    "price",
+    "stock",
+}
+
+
+def validate_fields(data, require_name=False):
+    """
+    Check incoming JSON. Returns an error message string,
+    or None if the data is valid.
+    """
+    if not isinstance(data, dict) or not data:
+        return "Request body must be a non-empty JSON object"
+
+    unknown = set(data) - ALLOWED_FIELDS
+    if unknown:
+        return f"Unknown field(s): {', '.join(sorted(unknown))}"
+
+    if require_name and not str(data.get("product_name", "")).strip():
+        return "product_name is required"
+
+    if "price" in data:
+        price = data["price"]
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or price < 0:
+            return "price must be a non-negative number"
+
+    if "stock" in data:
+        stock = data["stock"]
+        if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
+            return "stock must be a non-negative integer"
+
+    return None
+
+
+# ---------- CRUD routes ----------
+
+@app.route("/inventory", methods=["GET"])
+def get_inventory():
+    """GET /inventory -> return all items."""
+    return jsonify(inventory), 200
+
+
+@app.route("/inventory/<int:item_id>", methods=["GET"])
+def get_item(item_id):
+    """GET /inventory/<id> -> return one item."""
+    item = find_item(item_id)
+    if item is None:
+        return jsonify({"error": f"Item {item_id} not found"}), 404
+    return jsonify(item), 200
+
+
+@app.route("/inventory", methods=["POST"])
+def add_item():
+    """POST /inventory -> add a new item. product_name is required."""
+    data = request.get_json(silent=True)
+    error = validate_fields(data, require_name=True)
+    if error:
+        return jsonify({"error": error}), 400
+
+    new_item = {
+        "id": get_next_id(),
+        "barcode": data.get("barcode", ""),
+        "product_name": data["product_name"].strip(),
+        "brands": data.get("brands", ""),
+        "ingredients_text": data.get("ingredients_text", ""),
+        "categories": data.get("categories", ""),
+        "nutriscore_grade": data.get("nutriscore_grade", ""),
+        "image_url": data.get("image_url", ""),
+        "price": data.get("price", 0.0),
+        "stock": data.get("stock", 0),
+    }
+    inventory.append(new_item)
+    return jsonify(new_item), 201
+
+
+@app.route("/inventory/<int:item_id>", methods=["PATCH"])
+def update_item(item_id):
+    """PATCH /inventory/<id> -> update only the fields sent."""
+    item = find_item(item_id)
+    if item is None:
+        return jsonify({"error": f"Item {item_id} not found"}), 404
+
+    data = request.get_json(silent=True)
+    error = validate_fields(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    item.update(data)
+    return jsonify(item), 200
+
+
+@app.route("/inventory/<int:item_id>", methods=["DELETE"])
+def delete_item(item_id):
+    """DELETE /inventory/<id> -> remove an item."""
+    item = find_item(item_id)
+    if item is None:
+        return jsonify({"error": f"Item {item_id} not found"}), 404
+
+    inventory.remove(item)
+    return jsonify({"message": f"Item {item_id} deleted", "item": item}), 200
+
+
+# ---------- Error handlers (always return JSON, never HTML) ----------
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({"error": "Resource not found"}), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({"error": "Method not allowed"}), 405
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
